@@ -1,0 +1,1192 @@
+---
+title: "A Hotel Cancellation Prediction Tool"
+author: 'Team #64 - Patil Rutuja, Liu Yuxin, Hui Fei, van Keulen Alessio'
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_document:
+    keep_md: yes
+    css: styles.css
+    toc: yes
+    toc_float: yes
+    number_sections: yes
+---
+
+```{r include=FALSE}
+  knitr::opts_chunk$set(comment = NA)
+  knitr::opts_chunk$set(fig.align = "center")
+  knitr::opts_chunk$set(warning = FALSE)
+  knitr::opts_chunk$set(message = FALSE)
+  options(scipen=999)
+
+  # Load Required Libraries
+  if (!require(reshape2)) install.packages("reshape2")
+  library(reshape2)
+  if (!require(Hmisc)) install.packages("Hmisc")
+  library(Hmisc)
+  if (!require(scales)) install.packages("scales")
+  library(scales)
+  if (!require(DataExplorer)) install.packages("DataExplorer")
+  library(DataExplorer)
+  if (!require(dplyr)) install.packages("dplyr")
+  library(dplyr)
+  if (!require(caret)) install.packages("caret")
+  library(caret)
+  if (!require(GGally)) install.packages("GGally")
+  library(GGally)
+  if (!require(ggplot2)) install.packages("ggplot2")
+  library(ggplot2)
+  if (!require(rcompanion)) install.packages("rcompanion")
+  library(rcompanion)
+  if (!require(glmnet)) install.packages("glmnet")
+  library(glmnet)
+  if (!require(olsrr)) install.packages("olsrr")
+  library(olsrr)
+  if (!require(MASS)) install.packages("MASS")
+  library(MASS)
+  if (!require(ClusterR)) install.packages("ClusterR")
+  library(ClusterR)
+  if (!require(cluster)) install.packages("cluster")
+  library(cluster)
+  if (!require(stargazer)) install.packages("stargazer")
+  library(stargazer)
+  if (!require(ROCR)) install.packages("ROCR")
+  library(ROCR)
+```
+
+<hr />
+
+# Introduction
+With the advent and outreach of cellular web-technologies including ecommerce marketplaces, hotel booking platforms, and travel websites, the hospitality industry has seen major revolutions in terms of market exposure and capitalization.
+In the last decade, this revolution is especially noticeable in the lodging sector, where existing hotels, bed & breakfasts, inns, and other similar business have been witnessing an expanding portfolio of alternative and more affordable solutions for travelers in seek for a temporary accommodation. Other than the inherent increase in the competition, hotel managers and concierge, must deal with a more concrete problem: increasing reservation cancellation patterns.
+
+<hr />
+
+# Overview
+This study will attempt at describing and understanding the underlying forces that drive reservation cancellation decisions by customers toward their original lodging choices. Leveraging data analytics tools and practices, this analysis will distillate those factors that accompany a customer throughout their travel experience, into an essential set of variables that will accurately predict future reservation and cancellation patterns with similar characteristics. Finally, based on these observations, the project will serve as an effective prescription tool for optimizing vacancy and profits.
+
+<hr />
+
+# Data Preprocessing
+Data preprocessing in crucial step in our study. It will help enhance the quality of data to promote the extraction of meaningful insights. This technique involves preparing (cleaning and organizing) the raw data to make it suitable for a building and training Machine Learning models.
+
+## Data Import & Preliminary Manipulation
+Let's take a look at the structure as it is imported in R
+```{r}
+  # Clear working environment 
+  rm(list = ls())
+
+  # Data Import
+  data_raw <- read.csv(unz("__raw_hotel_data.zip","raw_hotel_data.csv"), header = T, stringsAsFactors = TRUE)
+
+  # Quick Glance at the Data Structure
+  str(data_raw)
+```
+<blockquote class="info">
+    <span>`r emo::ji("mag")`</span>
+    <span>
+      <strong>OBSERVATIONS:</strong> It looks like some variable are imported with the wrong data type:
+      <ul>
+        <li><strong>is_canceled</strong>, our response variable, is imported as INT but can only assume two values. We will convert this to FACTOR</li>
+        <li><strong>arrival_date_month</strong> is imported as Factor. We will change the months to its numerical representation, and switch the type to INT</li>
+        <li><strong>arrival_date_week_number</strong>, will be dropped as irrelevant since we have all other date related information already</li>
+        <li><strong>is_repeated_guest</strong>, is imported as INT but can only assume two values. We will convert this to FACTOR</li>
+        <li><strong>reservation_status_date</strong> is imported as factor. We will change this to the data type DATE</li>
+      </ul>
+    </span>
+</blockquote>
+
+```{r}
+  data <- data_raw
+
+  # Preliminary data manipulation
+  data <- data %>%
+    mutate(is_canceled = as.factor(is_canceled)) %>%
+    mutate(arrival_date_month = as.integer(match(arrival_date_month, month.name))) %>%
+    mutate(is_repeated_guest = as.factor(is_repeated_guest)) %>%
+    mutate(reservation_status_date = as.Date(reservation_status_date, format = "%m/%d/%Y")) %>%
+    dplyr::select(-arrival_date_week_number)
+```
+
+## Distribution Analysis
+This step involves the visualization of the distribution for each variable in our data set. This is a good technique to get an immediate understanding of how data flows through the sample period (2015-2017), and it could hint at trends and possible cyclical patterns.
+```{r, fig.width=14, fig.height=14}
+  hist(data[ , -which(names(data) %in% c( "hotel","is_canceled","meal","country","continent","market_segment", "distribution_channel","reserved_room_type","assigned_room_type",
+               "deposit_type","agent","company", "customer_type","reservation_status","is_repeated_guest"))])
+```
+<blockquote class="info">
+    <span>`r emo::ji("mag")`</span>
+    <span>
+      <strong>OBSERVATIONS:</strong> 
+      <ul>
+        <li>For each plot the variable's range is drawn on the X axis, and the frequency of occurrence on the Y axis</li>
+        <li>It stands out immediately how almost every variable is right skewed (positively skewed)</li>
+        <li>This suggests a pattern probably indicative of naturally expected preference in hotel reservation behavior (e.g., popular dates are in during summer time).</li>
+    </span>
+</blockquote>
+Now let's look at the categorical (factor) variables.
+```{r, fig.width=14, fig.height=14}
+  hist(data[, which(names(data) %in% c( "hotel","is_canceled","meal","country","continent","market_segment", "distribution_channel","reserved_room_type","assigned_room_type",
+               "deposit_type","agent","company", "customer_type","reservation_status","is_repeated_guest"))])
+```
+<blockquote class="info">
+    <span>`r emo::ji("mag")`</span>
+    <span>
+      <strong>OBSERVATIONS:</strong> Most of the factor variables have a range that spans from 2-10 different options. However, <strong>country</strong>, <strong>agent</strong>, <strong>company</strong>, and <strong>reservation_status_date</strong> have so many options that they overlap on the y axis of the plot creating that illegible black bar. These variables are referred to as High Cardinality Categorical Values, and usually Machine Learning algorithms have a hard time dealing with these.
+    </span>
+</blockquote>
+
+## Outlier Analysis (Univariate)
+
+The first step in the data preprocessing phase involves scanning for outliers. This may help us remove observations that can potentially skew or bias the results in our study. The easiest way to detect outliers if by using visualization techniques. Note that outlier detection requires a qualitative approach before deciding whether or not the data set needs to be discarded. Univariate Outlier Analysis involves addressing one variable at a time, free from any relationship they may have with other variables. These relationship would become apparent only after a statistical model is built, and for this reason this outlier analysis step is considered At Priori: before the actual study takes place. Any outlier that emerges after a regression analysis is considered At Posteriori, and will be covered later.
+
+### Outlier Visualization
+
+<blockquote class="warning">
+    <span>`r emo::ji("warning")`</span>
+    <span>
+      <strong>NOTE:</strong> Some other approaches suggest to check for missing values first. We have decided to check for outlier as a first step, because we believe that eventual data imputation for missing values, using <strong>Mode, Mean, Median</strong> techniques may be negatively influenced by outliers.
+    </span>
+</blockquote>
+
+Because we don't know how variables may be related toward one another, we will be a bit more lenient with defining what constitutes an outlier. We will start with some visual aids:
+
+```{r, fig.width=14, fig.height=14, message=FALSE, warning=FALSE,}
+  # The best way to have a quick glance at the distribution and eventual outliers is by using visual tools.
+  ggplot(melt(data), aes(variable, value, color=variable, fill=variable)) +
+    stat_boxplot(geom ='errorbar') + 
+    geom_boxplot(outlier.color = "#721c24", outlier.size = 2, outlier.shape = 4, ) +
+    facet_wrap(~variable, scale="free") +
+    scale_x_discrete(expand = c(0.6,0.6), label = "") +
+    labs(title = "Outlier Observation (before cleanup)", subtitle = "Limited to non-factor variables", x = "", y = "")
+```
+<blockquote class="info">
+    <span>`r emo::ji("mag")`</span>
+    <span>
+      <strong>OBSERVATIONS:</strong> At a first glance, it looks like many of these variables have observations that are found outside the whiskers for each boxplot. This would suggest that the data point is an outlier. However, a more qualitative approach needs to be respected when interpreting outliers. In the next step we will address outliers using a combination of the <strong>Percentile</strong> method and some educated guessing based on the underlying significance of each variable.
+    </span>
+</blockquote>
+
+
+### Outlier Detection
+Although visual tools are very helpful to get a panoramic view of the variable, to accurately detect outliers we need to have a better understand of the variable's distribution. In particular, we will adopt the percentile method. This involves defining a lower and upper boundaries within which the majority of the observations is to be found. Anything beyond these boundaries is a potential outlier.
+<blockquote class="warning">
+    <span>`r emo::ji("warning")`</span>
+    <span>
+      <strong>NOTE:</strong> This method only really works for variables that have a very large range. Take a look at the ranges for each variable in the plots above. For the variables <strong>adults</strong>, <strong>children</strong>, <strong>babies</strong> it looks like the majority of the distribution is concentrated in the colored box (usually 2 adults, 0 children, and 0 babies). But since the vast majority of observations is packed in such a small range, many data points seem to fall outside the acceptable boundaries.<br><br>
+      However, albeit dreadful, families may have 2 or more children/babies travelling with them (...that would not be a vacation anymore, but a nightmare, I give you that `r emo::ji("scream")`!)
+    </span>
+</blockquote>
+We will define two pair of boundaries: a common one, and a more strict one that will define our percentiles. Then we will count how many outliers are found. Because of the assumption that Univariate Outlier detection may lead to false positives, we will probably lean toward using the stricter percetiles. Any result that still seem to be indicative of a wrong outlier detection, will be addresses qualitatively.<br>
+
+We will not consider these variables:
+
+* _arrival_date_week_number_ as it presents no data points outside the whiskers, and the distribution is somewhat uniform<br>
+* _arrival_date_day_of_month_ as it presents no data points outside the whiskers, and the distribution is somewhat uniform<br>
+* _ex_rate_ since this data point was added, we know that it applies to the foreign customers, which is a smaller group in the distribution<br>
+* _temp_ as it presents no data points outside the whiskers, and the distribution is somewhat uniform
+
+```{r message=FALSE,}
+  # Let's define two standard lower and upper thresholds
+  # The overwhelming majority of the observations should fall within this range
+  l_thresh = 0.025
+  h_thresh = 0.975
+  
+  ll_thresh = 0.01
+  hh_thresh = 0.99
+  
+  # Total observations
+  n = nrow(data)
+  
+  # Omit Certain Columns
+  data_copy = data[ , -which(names(data) %in% c("arrival_date_year", "arrival_date_month", "arrival_date_week_number","arrival_date_day_of_month","ex_rate","temp"))]
+  
+  # Let's store our discoveries in a nice formatted table
+  d <- data.frame(matrix(ncol=5,nrow=0, dimnames=list(NULL, c("Column", "Range1", "n_outliers1", "Range2", "n_outliers2"))))
+
+  # Loop through all non-categorical variables in our data
+  for(i in 1:length(data_copy)){
+    
+    # Do this only for numerical and integer data types
+    if(class(data_copy[[i]])  ==  "integer" || class(data_copy[[i]])  ==  "numeric"){
+      
+      colname = colnames(data_copy[i])
+      low_per = quantile(data_copy[i], l_thresh, na.rm = TRUE)
+      high_per = quantile(data_copy[i], h_thresh, na.rm = TRUE)
+      lower_per = quantile(data_copy[i], ll_thresh, na.rm = TRUE)
+      higher_per = quantile(data_copy[i], hh_thresh, na.rm = TRUE)
+      
+      howmany1 = length(which(data_copy[i] < low_per | data_copy[i] > high_per))
+      howmany2 = length(which(data_copy[i] < lower_per | data_copy[i] > higher_per))
+      
+      d[nrow(d) + 1, ] = c(
+        colname,
+        paste(low_per, "-", high_per),
+        percent(howmany1 / n, accuracy = 0.01),
+        paste(lower_per, "-", higher_per),
+        percent(howmany2 / n, accuracy = 0.01))
+    }
+  }
+
+  knitr::kable(d, col.names = c(
+    "Variable",
+    "Range of Values within percentiles 2.5%-97.5%",
+    "% of Outliers Detected",
+    "Range of Values within percentiles 1%-99%",
+    "% of Outliers Detected"))
+```
+```{r include=FALSE}
+  # Dispose of Unused Objects
+  remove(l_thresh, h_thresh, n, d, i, colname, low_per, high_per, lower_per, higher_per, howmany1, howmany2, data_copy, data_raw)
+```
+<blockquote class="info">
+    <span>`r emo::ji("mag")`</span>
+    <span>
+      <strong>OBSERVATIONS:</strong>
+      <ul>
+        <li>The percentile method alone is not suitable for most of the variables, as their range is too small</li>
+        <li>The <strong>adr</strong> column seems to present a large amount of outliers, so percentiles will be manually adjusted</li>
+        <li>The <strong>ex_rate</strong> describes the currency cost of exchange for international travelers, we won't consider this variable</li>
+      </ul>
+      Finally, although some values seem to be wildly off the general mean in the distribution, the observation may still make sense in relationship with other variables. For example, if <strong>required_car_parking_spaces</strong> presents a value of "10", that could make sense if the <strong>customer_type</strong> was: "Transient-Party". However, these type of observations are not conclusive for the purpose of our study, and may drive our interpretations and conclusions down the wrong path, for this reason we have decided to discard them.
+    </span>
+</blockquote>
+```{r}
+  # Finally cleanup all the found outliers
+  lower_bound = quantile(data$lead_time, ll_thresh)
+  upper_bound = quantile(data$lead_time, hh_thresh)
+  outlier_inds <- which(data$lead_time < lower_bound | data$lead_time > upper_bound)
+
+  lower_bound = quantile(data$stays_in_weekend_nights, ll_thresh)
+  upper_bound = quantile(data$stays_in_weekend_nights, hh_thresh)
+  outlier_inds <- append(outlier_inds, which(data$stays_in_weekend_nights < lower_bound | data$stays_in_weekend_nights > upper_bound))
+  
+  lower_bound = quantile(data$stays_in_week_nights, ll_thresh)
+  upper_bound = quantile(data$stays_in_week_nights, hh_thresh)
+  outlier_inds <- append(outlier_inds, which(data$stays_in_week_nights < lower_bound | data$stays_in_week_nights > upper_bound))
+  
+  lower_bound = quantile(data$stays_in_week_nights, ll_thresh)
+  upper_bound = quantile(data$stays_in_week_nights, hh_thresh)
+  outlier_inds <- append(outlier_inds, which(data$stays_in_week_nights < lower_bound | data$stays_in_week_nights > upper_bound))
+  
+  outlier_inds <- append(outlier_inds, which(data$adults < 1 | data$adults > 4))
+  outlier_inds <- append(outlier_inds, which(data$children < 0 | data$children > 4))
+  outlier_inds <- append(outlier_inds, which(data$babies < 0 | data$babies > 4))
+  outlier_inds <- append(outlier_inds, which(data$previous_cancellations < 0 | data$previous_cancellations > 9))
+  outlier_inds <- append(outlier_inds, which(data$previous_bookings_not_canceled < 0 | data$previous_bookings_not_canceled > 9))
+  
+  lower_bound = quantile(data$booking_changes, ll_thresh)
+  upper_bound = quantile(data$booking_changes, hh_thresh)
+  outlier_inds <- append(outlier_inds, which(data$booking_changes < lower_bound | data$booking_changes > upper_bound))
+  
+  outlier_inds <- append(outlier_inds, which(data$days_in_waiting_list < 0 | data$days_in_waiting_list > 100))
+  outlier_inds <- append(outlier_inds, which(data$adr < 1 | data$adr > 1000))
+  
+  lower_bound = quantile(data$required_car_parking_spaces, ll_thresh)
+  upper_bound = quantile(data$required_car_parking_spaces, hh_thresh)
+  outlier_inds <- append(outlier_inds, which(data$required_car_parking_spaces < lower_bound | data$required_car_parking_spaces > upper_bound))
+  
+  outlier_inds <- append(outlier_inds, which(data$total_of_special_requests < 0 | data$total_of_special_requests > 2))
+  
+  outlier_inds <- unique(outlier_inds)
+  
+  data <- data[-c(outlier_inds), ]
+```
+```{r include=FALSE}
+  # Dispose of Unused Objects
+  remove(lower_bound, upper_bound, outlier_inds, ll_thresh, hh_thresh)
+```
+Let's take a look at an updated visual representation of the outliers.
+```{r fig.width=14, fig.height=14, }
+  ggplot(melt(data), aes(variable, value, color=variable, fill=variable)) +
+    stat_boxplot(geom ='errorbar') + 
+    geom_boxplot(outlier.color = "#721c24", outlier.size = 2, outlier.shape = 4, ) +
+    facet_wrap(~variable, scale="free") +
+    scale_x_discrete(expand = c(0.6,0.6), label = "") +
+    labs(title = "Outlier Observation (after cleanup)", subtitle = "Limited to non-factor variables", x = "", y = "")
+```
+
+## Data Imputation
+Now that we have addressed obvious outliers, our next step will be to fill in missing values in any in our variables. The outcome of this is going to be more precise as outliers could have skewed our biased our data imputation techniques. As usual we will being with some visual aid:
+```{r fig.width=14, fig.height=8,}
+  plot_missing(
+    data,
+    title = "Hotel Reservation Missing Data",
+    group=list("Excellent" = 0.0, "Good" = .06, "Ok" = .1, "Bad" = .15),
+    theme_config = list(legend.position = c("top")),
+    geom_label_args = list("size" = 3, "label.padding" = unit(.3, "lines"))
+  )
+```
+<blockquote class="info">
+    <span>`r emo::ji("mag")`</span>
+    <span>
+      <strong>OBSERVATIONS:</strong> Based on the plot above, it looks like the only variable that contains missing values is the "children" column. Children is of type INT and is discrete. Therefore the proper imputation technique is the mean of the distribution (we will round the value to the closest integer). Note that this plot above, only shows missing values that appearin the data set as NA. For other missing values such as NULL, a more qualtitative analysis needs to be done.
+    </span>
+</blockquote>
+```{r}
+  # Check for any missing values (NAs), and
+  # find unique indexes of column with missing values
+  nas_cols_idx = unique(which(is.na(data), arr.ind=TRUE)[,2])
+
+  # The proper imputation technique depends on the column type
+  # Let's get the column name and data type
+  cat("Column '",names(data[nas_cols_idx]), "' contains missing values. The data type is '", typeof(data[,nas_cols_idx]), "'.", sep = "")
+  
+  # The proper imputation technique for type INTGER is the MEAN. 
+  mean_children = mean(data$children, na.rm = TRUE)
+
+  # Now we can fill in the missing values
+  data$children[is.na(data$children)] <- round(mean_children)
+  data$children = as.integer(data$children)
+```
+```{r include=FALSE}
+  # Dispose of Unused Objects
+  remove(mean_children, nas_cols_idx)
+```
+
+
+## Categorical Variable Analysis
+
+Based on the frequency distributions in the section above, we observe that some factor variables have 100+ options: very high cardinality. This is problematic from a machine learning perspective as One-Hot encoding those factor variables into dummy variables would explode the size of our data set, exponentially increasing the interpretation difficulty, taking up size, and increasing computational time. Also, the resulting model is highly like to be over-fitted, and not applicable to other realities.
+
+Our plan is to group low-occurrence levels into a new option: "OTHER". This will help us drastically reduce the size of categorical variables. We can then proceed with encoding the results.
+```{r fig.width=14, fig.height=8}
+  # For convenience we'll plot the factors that we are going to resize here:
+  #hist(data[, which(names(data) %in% c("country","agent","company"))])
+
+  data <- group_category(data, "country", 0.2, update = TRUE, category_name = "OTHER")
+  data <- group_category(data, "agent", 0.2, update = TRUE, category_name = "OTHER")
+  data <- group_category(data, "company", 0.05, update = TRUE, category_name = "OTHER")
+  
+  hist(data[, which(names(data) %in% c("country","agent","company"))])
+  
+  data <- data %>%
+    mutate(country = as.factor(country)) %>%
+    mutate(agent = as.factor(agent))
+```
+<blockquote class="info">
+    <span>`r emo::ji("mag")`</span>
+    <span>
+      <strong>OBSERVATIONS:</strong> We have successfully reduced the amount of levels for each of our high-cardinality categorical variables.</span>
+</blockquote>
+
+
+## Multicollinearity
+Another good thing to do next is to use a visualization of a correlation matrix plot to get a better idea of how our features relate pairwise to one another. This is an especially great tool for understating and avoid multicollinearity in regression models. We will use an educated guess as to which variables may be linearly correlated. If we find a highly correlated pattern, we can safely discard one of those variables.
+
+```{r}
+  tot_guest = data$adults + data$children + data$babies
+  assumption = data.frame(cbind(tot_guest,data$adr))
+  colnames(assumption) <- c("Total Guests", "Average Daily Rate")
+  ggpairs(assumption)
+```
+As one may expect, there is some indication of a correlation between the number of total guests and the average daily rate, however it is not statistically relevant.
+```{r}
+  assumption = data.frame(cbind(tot_guest,data$required_car_parking_spaces))
+  colnames(assumption) <- c("Total Guests", "Number of Reserved Car Spots")
+  ggpairs(assumption)
+```
+Unintuitively total number of guests and reserved park spots is a combination of variables that is very weakly correlated.
+```{r}
+  ggpairs(data[, which(names(data) %in% c("lead_time","days_in_waiting_list") )])
+```
+Now let's take a look at possible linear relationship between categorical variables.
+```{r}
+  combinations <- c(
+    "meal - is_repeat_gues",
+    "meal - reserved_room_type",
+    "meal - assigned_room_type",
+    "meal - deposit_type",
+    "meal - company",
+    "meal - hotel",
+    "meal - is_canceled",
+    "market_segment - agent")
+  results <- c(
+    cramerV(data$meal,data$is_repeated_guest),
+    cramerV(data$meal,data$reserved_room_type),
+    cramerV(data$meal,data$assigned_room_type),
+    cramerV(data$meal,data$deposit_type),
+    cramerV(data$meal,data$company),
+    cramerV(data$market_segment,data$agent),
+    cramerV(data$meal,data$hotel),
+    cramerV(data$meal,data$is_canceled))
+  
+  correlation <- as.data.frame(cbind(combinations, results))
+  head(correlation, 8)
+```
+```{r include=FALSE}
+  # Dispose of Unused Objects
+  remove(assumption, tot_guest)
+  
+  #write.csv(data,file='hotel_data.csv')
+```
+Also this combination doesn't show any significant correlation.
+<blockquote class="info">
+    <span>`r emo::ji("mag")`</span>
+    <span>
+      <strong>OBSERVATIONS:</strong> Using some educated guessing, we've tried to pair up different combination of variables in search for multicollinearity. We have found nothing significant we could leverage to reduce the amount of predictors.
+    </span>
+</blockquote>
+
+<blockquote class="success">
+    <span>`r emo::ji("sparkles")`</span>
+    <span>
+      <strong>CONCLUSION:</strong> This concludes the data pre-processing phase. We have significantly formatted the data to make it suitable for further analysis.
+    </span>
+</blockquote>
+
+<hr />
+
+
+## First Study - Resort Hotel
+
+The Resort Hotel is one of the two Hotel types we were able to gather data from. Our study attempt at describing reservation cancellation rates, via descriptive and predictive analytics. In particular, since the outcome of our response variable can assume only two states "Canceled: 1" or "Not Canceled: 0", we will heavily leverage logistic regression. At the end of the procedure we will repeat the analysis on the secondary Hotel type, as we are interested into researching whether the same variables/predictors may affect the outcome differently depending on the hotel the reservation is made for.
+
+### Variable Selection 
+There are `r ncol(data)` variables in our original data set which may be appropriate considering the size of the data set overall. However, in order to avoid over fitting our model, its important to perform some type of variable selection process. The first steps will be to remove the columns that seem the most irrelevant or containing large amounts of missing information. 
+
+For variable selection, we going to take the following steps to manually eliminate some predictors.
+
+### Qualitative Analysis
+
+Before we throw our variables into our model, it could be beneficial to understand whether ceertain predictors are even relevant for the purpose of our study:
+
+- _reservation_status_date_ can be inferred by can be inferred from the arrival date and the lead time
+
+Let's take a look at the other variables a bit more in detail:
+```{r}
+  # Drop reservation_status_date
+  data <- data %>%
+    dplyr::select(-reservation_status_date) %>%
+
+    # By analyzing the distribution of the company column we can find that the NULL value occurs > 94% of the total distribution.
+    # Since the company is almost totally devoid of values we have decided to drop it.
+    dplyr::select(-company) %>%
+    
+    # update some columns as factors
+    mutate(arrival_date_month = as.factor(arrival_date_month)) %>%
+    mutate(arrival_date_year = as.factor(arrival_date_year)) %>%
+    mutate(required_car_parking_spaces = as.factor(required_car_parking_spaces)) %>%
+    mutate(previous_cancellations = as.factor(previous_cancellations))
+    
+  # Observe the reservation status column compared to is_cancelled
+  describe(data$reservation_status)
+  describe(data$is_canceled)
+    
+  # Observe the market segment column compared to distribution channel 
+  describe(data$market_segment)
+  describe(data$distribution_channel)
+```
+<blockquote class="info">
+    <span>`r emo::ji("mag")`</span>
+    <span>
+      <strong>OBSERVATIONS:</strong> Upon further observation we have discovered that some variables are vary similar for what concerns their values:
+      <ul>
+        <li><strong>reservation_status</strong> and <strong>canceled</strong> are almost identical with the exception that the former one has one more level "No-Show" which is not helpful for the purpose of predicting cancellation.</li>
+        <li><strong>market_segment</strong> and <strong>distribution_channel</strong> are very similar with the exception of a two levels</li>
+        <li><strong>arrival_date_year</strong>, <strong>arrival_date_month</strong>, <strong>arrival_date_day_of_month</strong> have an intrinsic seasonality meaning, which can be explained just through the month variable</li>
+        <li><strong>previous_cancellations</strong> and <strong>previous_bookings_not_canceled</strong> are similar but for the purpose of predicting cancellation patterns, the latter one is probably irrelevant.</li>
+      </ul>
+    </span>
+</blockquote>
+
+
+```{r}
+  # We will proceed by removing those predictors
+  data <- data %>%
+    dplyr::select(c(-reservation_status,distribution_channel,arrival_date_year, arrival_date_day_of_month, previous_bookings_not_canceled))
+```
+
+
+### Variable Combination / Semplification
+
+It turns out that some variable can be combined in a larger custom variable that is going to simply the study and the interpretation of the model.
+
+- _children_ and _babies_ variables will be combined into a new variable: *total_children*
+- _stays_in_week_nights_ and _stays_in_weekend_nights_ will be combined into a new variable: *total_nights_stayed*
+_ _assigned_room_type_ and _reserved_room_type_ will be combined into a new variable: *mismatched_room* indicating whether the room had been changed or not compared to the reserved room type.
+
+```{r}
+  data <- data %>%
+    mutate(total_children = children + babies) %>%
+    dplyr::select(-c(babies, children)) %>%
+  
+    mutate(total_nights_stayed = stays_in_week_nights + stays_in_weekend_nights) %>%
+    dplyr::select(-c(stays_in_week_nights, stays_in_weekend_nights)) %>%
+
+    mutate(mismatched_room = as.factor(if_else(as.character(reserved_room_type)  ==  as.character(assigned_room_type),0,1))) %>%
+    dplyr::select(-c(assigned_room_type,reserved_room_type)) %>%
+
+    mutate(previous_cancellations = as.factor(data$previous_cancellations))
+```
+
+### Level Reduction
+
+Building on top of level-reduction steps taken in the categorical variable analysis phase, here we will further reduce levels where it makes sense. To do this we will do a quantitative analysis of frequency for each for of the categorical variables.
+```{r}
+  # Agent Column
+  describe(data$agent)
+
+  # Agent #9 accounts for 27% of the distribution
+  # Agent NULL (no agent) accounts for 13% of the distribution
+  # Agent #240 accounts for 12% of the distribution
+  # We will group the rest
+  data <- data %>% 
+    mutate(agent = case_when(
+                        agent == 9 ~ '9',
+                        agent == 'NULL' ~ 'NULL',
+                        agent == 240 ~ '240',
+                        TRUE ~ 'Other')) %>% 
+
+    # Group total special request into 0 or 1 (indicating one or more)
+    mutate(has_special_request = as.factor(ifelse(total_of_special_requests == 0,0,1))) %>%
+    dplyr::select(-total_of_special_requests) %>%
+  
+    # Group number of booking_changes into 0 or 1 (indicating one or more)
+    mutate(has_booking_change = as.factor(ifelse(booking_changes == 0,0,1))) %>%
+    dplyr::select(-booking_changes) %>%
+      
+    # Group number total_children into 0 or 1 (indicating one or more)
+    mutate(has_children = as.factor(ifelse(total_children == 0,0,1))) %>%
+    dplyr::select(-total_children) %>%
+  
+    # Group SC/Undefined meal packages under one level: NM (No Meal)
+    mutate(meal = case_when(
+                        meal == 'BB' ~ 'BB',
+                        meal == 'FB' ~ 'FB',
+                        meal == 'HB' ~ 'HB',
+                        meal == 'SC' ~ 'NM',
+                        TRUE ~ 'NM'))
+    
+  # Set Portugal PRT as base level for country variable
+   data$country <- relevel(data$country,ref='PRT')
+
+  # Finally let's display our slimmed down data set
+  #str(data)
+```
+
+<blockquote class="info">
+    <span>`r emo::ji("mag")`</span>
+    <span>
+      <strong>OBSERVATIONS:</strong> An important step to note is the replacement of a category within the "meal" column from an undefined meal to the mode of the column. As only 300/119,000 entries have been indicated as undefined, we've imputed the data to be able to deliver some meaningful results. 
+    </span>
+</blockquote>
+
+<hr />
+
+### Variable Selection through Step-Wise Regression
+
+Now that we have explored variable selection from a qualitative point of view, it's time to deploy some statistical machine learning algorithms to help us further identify strong vs weak predictors. For this step we will use *Step-wise Regression*
+
+```{r,}
+  # Split data into Resort vs. City hotels data sub sets
+  data_resortHotel <- data[which(data$hotel == 'Resort Hotel'),]
+  data_cityHotel <- data[which(data$hotel == 'City Hotel'),]
+  
+  # Remove the 'hotel' variable as this field is now implicit in the subste
+  data_resortHotel <- data_resortHotel %>% dplyr::select(-hotel)
+  data_cityHotel <- data_cityHotel %>% dplyr::select(-hotel)
+  
+  # Split These into training and test subsets (80% and 20%)
+  resortHotel_idx <- createDataPartition(data_resortHotel$is_canceled, p=0.8, list=FALSE)
+  cityHotel_idx <- createDataPartition(data_cityHotel$is_canceled, p=0.8, list=FALSE)
+  
+  # Ensure reproducibility of outcome
+  set.seed(123)
+
+  data_train__resort <- data_resortHotel[resortHotel_idx,]
+  data_test__resort <- data_resortHotel[-resortHotel_idx,]
+
+  data_train__city <- data_cityHotel[cityHotel_idx,]
+  data_test__city <- data_cityHotel[-cityHotel_idx,]
+```
+
+We will start with a forward step-wise regression algorithm on the Resort Hotel subset.
+
+```{r}
+  # Starting point Model, containing no predictors
+  modZero <- glm(is_canceled ~ 1, data = data_train__resort, family = "binomial")
+
+  # Final Model, containing all predictors
+  full_model_resort <- glm(is_canceled ~ 
+          lead_time + arrival_date_month + adults + country + market_segment + is_repeated_guest + previous_cancellations + 
+          deposit_type + days_in_waiting_list + customer_type + adr + required_car_parking_spaces + temp + total_nights_stayed + 
+          mismatched_room + agent + has_special_request + has_booking_change + has_children + meal,
+            data = data_train__resort, family = "binomial")
+
+  step_resort <- stepAIC(modZero, direction = "forward", scope = list(lower = modZero, upper = full_model_resort), k = 2, trace = F)
+  #summary(step_resort)
+```
+<blockquote class="info">
+    <span>`r emo::ji("mag")`</span>
+    <span>
+      <strong>OBSERVATIONS:</strong> Based on the previous procedure, it looks like the variables *previous cancellation*, *required_car_parking_spaces*, *meal* do not contribute with improving the AIC score. Thus, we won't consider them when building our logist regression model.
+    </span>
+</blockquote>
+
+```{r include=FALSE}
+  # Dispose of Unused Objects
+  remove(data, resortHotel_idx, step_resort, cityHotel_idx, data_cityHotel, data_resortHotel)
+```
+
+```{r}
+  final_model_resort_1 <- glm(is_canceled ~ 
+          deposit_type + agent + country + lead_time + has_special_request + has_booking_change + adr + is_repeated_guest + 
+          market_segment + customer_type + total_nights_stayed + arrival_date_month + days_in_waiting_list + temp + adults +
+          has_children,
+            family = "binomial",  data = data_train__resort)
+  #summary(final_model_resort_1)
+```
+<blockquote class="info">
+    <span>`r emo::ji("mag")`</span>
+    <span>
+      <strong>OBSERVATIONS:</strong> From the ANOVA table we can see that:
+      <ul>
+        <li><strong>market_segment</strong> variable shows a p-value that is not significant enough to reject the Null-Hypothesis</li>
+        <li><strong>customer_typeTransient</strong> has higher odds of cancellation compared to the other levels in the variable</li>
+        <li><strong>agent9</strong> is not statically different from 240 (which is the baseline) so they can be grouped. There is a 95% Confidence Interval that Null and Other overlap with each other, so they can be grouped together</li>
+        <li><strong>arrival_date_month3, arrival_date_month4, arrival_date_month5, arrival_date_month10, arrival_date_month11, arrival_date_month12</strong> corresponding to the months of March, April, May, October, November, and December, do not show statistical significance.</li>
+        <li><strong>country</strong> displays significance at all levels</li>
+      </ul>
+    </span>
+</blockquote>
+
+<blockquote class="warning">
+    <span>`r emo::ji("warning")`</span>
+    <span>
+      <strong>NOTE:</strong>  Its important to note that the Non Refundable deposit type is significant, so due to this, we will group the rest of the types. We expect non refundable generally has a lower cancellation rate. But the model tells us the odds of cancellation of Non Refundable reservation are 330% higher than the cancellation of the No Deposit and Refundable customer, which is a surprised finding. This means the by implementing the Non Refundable cancellation policy actually won't lower the probability of cancellation action. The hotel management should rethink whether they should still adopt non refundable policies.
+    </span>
+</blockquote>
+```{r,}
+  # Here we will adjust the variables according to what we've observed from the StepAIC results
+
+  # Adjustments - Train subset Resort Hotel
+  data_train__resort <- data_train__resort %>%
+    mutate(deposit_type_grp = ifelse(deposit_type == 'Non Refund', 'NonRefund', "Other")) %>%
+    mutate(deposit_type_grp = relevel(factor(deposit_type_grp), ref="Other")) %>%
+    mutate(agent_grp = case_when(
+                                agent == 'NULL' ~ 'Other',
+                                agent == 'Other' ~ 'Other',
+                                TRUE ~ '9_240')) %>%
+    mutate(customer_type_grp = case_when(
+                                customer_type == 'Transient' ~ 'Transient',
+                                TRUE ~ 'Other'
+                              )) %>%
+    mutate(arrival_month_grp = case_when(
+                                arrival_date_month == 2 ~ 2,
+                                arrival_date_month == 6 ~ 6,
+                                arrival_date_month == 7 ~ 7,
+                                arrival_date_month == 8 ~ 8,
+                                arrival_date_month == 9 ~ 9,
+                                arrival_date_month == 10 ~ 10,
+                                TRUE ~ 0)) %>%
+    mutate(arrival_month_grp = as.factor(arrival_month_grp))
+
+
+  data_test__resort <- data_test__resort %>%
+    mutate(deposit_type_grp = ifelse(deposit_type == 'Non Refund', 'NonRefund', "Other")) %>%
+    mutate(deposit_type_grp = relevel(factor(deposit_type_grp), ref="Other")) %>%
+    mutate(agent_grp = case_when(
+                                agent == 'NULL' ~ 'Other',
+                                agent == 'Other' ~ 'Other',
+                                TRUE ~ '9_240')) %>%
+    mutate(customer_type_grp = case_when(
+                                customer_type=='Transient' ~ 'Transient',
+                                TRUE ~ 'Other'
+                              )) %>%
+    mutate(arrival_month_grp = case_when(
+                                arrival_date_month == 2 ~ 2,
+                                arrival_date_month == 6 ~ 6,
+                                arrival_date_month == 7 ~ 7,
+                                arrival_date_month == 8 ~ 8,
+                                arrival_date_month == 9 ~ 9,
+                                arrival_date_month == 10 ~ 10,
+                                TRUE~0)) %>%
+    mutate(arrival_month_grp = as.factor(arrival_month_grp))
+```
+For what concerns the country variable, we will construct the 95% confidence interval chart to see if the estimated means are truly different from each other.
+```{r}
+  # We will use the 95% Confidence Interval for country variable, to reduce levels. 
+
+  country <- data.frame(
+    country_name = c("DEU","ESP","FRA","GBR","IRL","ITA","Other"),
+    country_est = c(
+      final_model_resort_1$coefficients["countryDEU"],
+      final_model_resort_1$coefficients["countryESP"],
+      final_model_resort_1$coefficients["countryFRA"],
+      final_model_resort_1$coefficients["countryGBR"],
+      final_model_resort_1$coefficients["countryIRL"],
+      final_model_resort_1$coefficients["countryITA"],
+      final_model_resort_1$coefficients["countryOTHER"]),
+    lower_bound = c(
+      final_model_resort_1$coefficients["countryDEU"]-1.96*coef(summary(final_model_resort_1))[, "Std. Error"]["countryDEU"],
+      final_model_resort_1$coefficients["countryESP"]-1.96*coef(summary(final_model_resort_1))[, "Std. Error"]["countryESP"],
+      final_model_resort_1$coefficients["countryFRA"]-1.96*coef(summary(final_model_resort_1))[, "Std. Error"]["countryFRA"],
+      final_model_resort_1$coefficients["countryGBR"]-1.96*coef(summary(final_model_resort_1))[, "Std. Error"]["countryGBR"],
+      final_model_resort_1$coefficients["countryIRL"]-1.96*coef(summary(final_model_resort_1))[, "Std. Error"]["countryIRL"],
+      final_model_resort_1$coefficients["countryITA"]-1.96*coef(summary(final_model_resort_1))[, "Std. Error"]["countryITA"],
+      final_model_resort_1$coefficients["countryOTHER"]-1.96*coef(summary(final_model_resort_1))[, "Std. Error"]["countryOTHER"]),
+    upper_bound = c(
+      final_model_resort_1$coefficients["countryDEU"]+1.96*coef(summary(final_model_resort_1))[, "Std. Error"]["countryDEU"],
+      final_model_resort_1$coefficients["countryESP"]+1.96*coef(summary(final_model_resort_1))[, "Std. Error"]["countryESP"],
+      final_model_resort_1$coefficients["countryFRA"]+1.96*coef(summary(final_model_resort_1))[, "Std. Error"]["countryFRA"],
+      final_model_resort_1$coefficients["countryGBR"]+1.96*coef(summary(final_model_resort_1))[, "Std. Error"]["countryGBR"],
+      final_model_resort_1$coefficients["countryIRL"]+1.96*coef(summary(final_model_resort_1))[, "Std. Error"]["countryIRL"],
+      final_model_resort_1$coefficients["countryITA"]+1.96*coef(summary(final_model_resort_1))[, "Std. Error"]["countryITA"],
+      final_model_resort_1$coefficients["countryOTHER"]+1.96*coef(summary(final_model_resort_1))[, "Std. Error"]["countryOTHER"])
+    )
+
+  
+    ggplot(country, aes(country_name,country_est, color=country_name, fill=country_name)) + 
+    geom_point() + 
+    geom_errorbar( aes(ymin=lower_bound,ymax=upper_bound) )+labs(title="95% Confidence Interval for Country Variable - Resort Hotel",x="country",y="estimate coeff")
+```
+<blockquote class="info">
+    <span>`r emo::ji("mag")`</span>
+    <span>
+      <strong>OBSERVATIONS:</strong> 
+      <ul>
+        <li>Based on the plot above, it looks like DEU, ESP do not overlap with others, so their coefficients are statistically different from each other</li>
+        <li>FRA and IRL overlap with each other, so their coefficients are not statistically different from each other.</li>
+        <li>GRB will be considered by itself.</li>
+        <li>ITA and Other overlapped, so their coefficients are not statistically different from each other.</li>
+      </ul>
+    </span>
+</blockquote>
+
+
+Now will proceed with grouping country levels:
+```{r}
+data_train__resort <- data_train__resort %>%
+  mutate(country = case_when(
+                      country == 'DEU' ~ 'DEU',
+                      country == 'ESP' ~ 'ESP',
+                      country == 'FRA' ~ 'FRA_IRL',
+                      country == 'IRL' ~ 'FRA_IRL',
+                      country == 'GBR' ~ 'GBR',
+                      country == 'PRT' ~ 'PRT',
+                      TRUE ~ 'ITA_OTH')) %>%
+  mutate(country = relevel(factor(country), ref="PRT"))
+
+data_test__resort <- data_test__resort %>%
+  mutate(country = case_when(
+                      country == 'DEU' ~ 'DEU',
+                      country == 'ESP' ~ 'ESP',
+                      country == 'FRA' ~ 'FRA_IRL',
+                      country == 'IRL' ~ 'FRA_IRL',
+                      country == 'GBR' ~ 'GBR',
+                      country == 'PRT' ~ 'PRT',
+                      TRUE ~ 'ITA_OTH')) %>%
+  mutate(cuntry = relevel(factor(country), ref="PRT"))
+```
+
+### Model Fitting 
+
+Now let's fit the 2nd model based on the grouped variables. 
+
+```{r}
+  final_model_resort_2 <- glm(is_canceled ~
+      deposit_type_grp + agent_grp + country + lead_time + has_special_request + has_booking_change + is_repeated_guest + arrival_month_grp +
+      total_nights_stayed + customer_type_grp + adr + days_in_waiting_list + adults + has_children + temp,
+      family = "binomial", data = data_train__resort)
+  
+  summary(final_model_resort_2)
+```
+
+Based on the final_model_resort_2 result, it looks like arrival month 7 and 8 can be grouped together since their 95% CI overlaps with each other. 
+
+```{r}
+  # Group Months
+  data_train__resort <- data_train__resort %>% 
+      mutate(arr_mo = as.factor(case_when(
+                                  arrival_month_grp == 2 ~ 2,
+                                  arrival_month_grp == 6 ~ 6,
+                                  arrival_month_grp == 7 ~ 7, # 7 INCLUDES July, August
+                                  arrival_month_grp == 8 ~ 7, 
+                                  arrival_month_grp == 9 ~ 9,
+                                  arrival_month_grp == 10 ~ 10,
+                                  TRUE~0)))
+  
+  data_test__resort <- data_test__resort %>% 
+      mutate(arr_mo = as.factor(case_when(
+                                  arrival_month_grp == 2 ~ 2,
+                                  arrival_month_grp == 6 ~ 6,
+                                  arrival_month_grp == 7 ~ 7, # 7 INCLUDES July, August
+                                  arrival_month_grp == 8 ~ 7, 
+                                  arrival_month_grp == 9 ~ 9,
+                                  arrival_month_grp == 10 ~ 10,
+                                  TRUE~0)))
+```
+
+Let's fit the data to a 3rd model.
+```{r}
+  final_model_resort_3 <- glm(is_canceled ~
+    deposit_type_grp + agent_grp + country + lead_time + has_special_request + has_booking_change + is_repeated_guest + 
+    arr_mo + total_nights_stayed + customer_type_grp + adr + days_in_waiting_list + adults + has_children + temp,
+    family = "binomial", data = data_train__resort)
+
+  #summary(final_model_resort_3)
+```
+
+
+### Model 3 Finding - Final Model:
+From the previous analyses it emerged that:
+
+- Refundable deposit. NonRefundable deposit type is significant and has higher cancellation probability than the other two types (refundable and no deposit). The non refundable definition is customer made full deposit when reserve, refundable is customer made partial payment. But this field does not say whether the payment can be refunded if canceled.Maybe it'll be more helpful to have that information. 
+- Agent "NULL" and "Other" have lower cancellation rate than Agent "9" and "240"
+- Reservations made from Portugal have a much higher cancellation probability compared to others
+  - Germany reservations have the lowest cancellation rate
+- Lead time: 1 unit (day) higher lead time, cancellation probability increased by 0.8%
+- Reservations that have special requests have lower cancellation probability than the ones that do not
+- Reservations that present a booking change, have a lower cancellation probability that the ones that didn't
+- If a reservation is made by a repeated guest, that reservation presents lower probability compared to one reservation made by a new customer
+- The months of February though August have higher cancellation rate compared to January and September
+  - December has the highest cancellation rate
+- For each additional night of stay, the cancellation probability increases by 8.2%
+- A reservation made by a "transient" customer has a high cancellation rate
+- A $1 increase in the Average Daily Rate (ADR)) is associated with a 0.5% increase in cancellation probability
+- A 1 Day increase in the wait line, is associated with a% decrease in the cancellation probability 
+- A reservation that has children has a high cancellation probability
+- A 1F temperature increase is associated with a 4.3% increase in the cancellation probability
+
+
+## Model Testing 
+The best way to convey the performance of ours models is to display a confusion matrix. Here we will print the results of our model fitted on 
+both the training data subset (left) and the test subset (right)
+
+```{r}
+  # Prediction on the training data set
+  pred <- predict(final_model_resort_3,data_train__resort,type='response')
+  data_train__resort <- data_train__resort %>%
+    mutate(pred = pred) %>%
+    mutate(pred_binary = as.factor(ifelse(pred >= 0.5, 1, 0)))
+  
+  cm <- confusionMatrix(data=data_train__resort$pred_binary,reference=data_train__resort$is_canceled,positive='1')
+  
+  plt <- as.data.frame(cm$table)
+  plt$Prediction <- factor(plt$Prediction, levels=rev(levels(plt$Prediction)))
+  
+  ggplot(plt, aes(Prediction,Reference, fill = Freq)) +
+    geom_tile() + geom_text(aes(label=Freq)) +
+    scale_fill_gradient(low="white", high="red") +
+    labs(x = "Reference",y = "Prediction") +
+    scale_x_discrete(labels=c("Class_1","Class_2","Class_3","Class_4")) +
+    scale_y_discrete(labels=c("Class_4","Class_3","Class_2","Class_1"))
+
+  pred_test <- predict(final_model_resort_3, data_test__resort, type='response')
+  data_test__resort <- data_test__resort %>%
+    mutate(pred = pred_test) %>%
+    mutate(pred_binary = as.factor(ifelse(pred >= 0.5, 1, 0)))
+  
+  cm <- confusionMatrix(data = data_test__resort$pred_binary, reference = data_test__resort$is_canceled, positive='1')
+  
+  plt <- as.data.frame(cm$table)
+  plt$Prediction <- factor(plt$Prediction, levels=rev(levels(plt$Prediction)))
+  
+  ggplot(plt, aes(Prediction,Reference, fill = Freq)) +
+    geom_tile() + geom_text(aes(label = Freq)) +
+    scale_fill_gradient(low="white", high="blue") +
+    labs(x = "Reference",y = "Prediction")
+  
+predicts <- prediction(as.numeric(data_test__resort$pred),as.numeric(data_test__resort$is_canceled))
+roc <- performance(predicts,"tpr", "fpr")
+plot(roc,main="ROC curve for Resort Hotel GLM model")
+
+
+auc_ROCR <- performance(predicts, measure = "auc")
+auc_ROCR <- auc_ROCR@y.values[[1]]
+print(paste("AUC value for logistic regression: ",auc_ROCR))
+
+```
+<blockquote class="success">
+    <span>`r emo::ji("sparkles")`</span>
+    <span>
+      <strong>CONCLUSION:</strong> This concludes the analysis on the Resort Hotel type.
+    </span>
+</blockquote>
+
+## Second Study - City Hotel
+
+As mentioned above, this phase will reproduce the analysis on the second hotel type.
+
+```{r}
+  modZero <- glm(is_canceled ~ 1, data = data_train__city, family = "binomial")
+  
+  full_model_city <- glm(is_canceled ~
+    lead_time + arrival_date_month + adults + country + market_segment + is_repeated_guest + previous_cancellations + deposit_type +
+    days_in_waiting_list + customer_type + adr + required_car_parking_spaces + temp + total_nights_stayed + mismatched_room +
+    agent + has_special_request + has_booking_change + has_children + meal,
+    data = data_train__city, family = "binomial")
+  
+  step_city <- stepAIC(modZero, direction = "forward", scope = list(lower = modZero, upper = full_model_city), k = 2, trace = F)
+  step_city$anova
+  
+  full_model_city_1 <- glm(is_canceled ~ 
+    deposit_type + agent + country + has_special_request + lead_time + has_booking_change + customer_type + total_nights_stayed + 
+    market_segment + days_in_waiting_list + meal + arrival_date_month + adr + temp + adults + has_children,
+    data = data_train__city, family = "binomial")
+  
+  summary(full_model_city_1)
+```
+#### City Data Model Findings 
+
+Following a similar process of variable removal as Resort Hotel, the following variables were removed by stepAIC: *previous_cancellations*, *mismatched_room*, *required_car_parking_spaces*
+
+<blockquote class="warning">
+    <span>`r emo::ji("warning")`</span>
+    <span>
+      <strong>NOTE:</strong>  One difference that emerge already is that City Hotel the stepAIC suggests to remove this additional predictor variable *is_repeated_guest*
+    </span>
+</blockquote>
+
+We'll have to clean up variables based on the full_model_city_1 results:
+- Remove *agent* from the model since it is not significant
+- Group *customer_type* into Transient vs. Other, similarly to what we did for the Resort Hotel data set
+- The *market_segment* is significant but we will group it into Corporate vs. Other
+- Group *meal* variable into HB vs. Other
+- Group *arrival_date_month* values "November", "December", and "January" into one group 
+- Remove *has_children* from the model since the AIC improvement is only 1. This is a small improvement and the model result shows it's not significant. 
+
+```{r}
+  data_train__city <- data_train__city %>%
+    mutate(customer_type_grp = case_when( customer_type == 'Transient' ~ 'Transient', TRUE ~ 'Other' )) %>%
+    mutate(mkt_seg_grp = case_when( market_segment == 'Corporate' ~ 'Corporate', TRUE ~ 'Other')) %>%
+    mutate(arr_mo = ifelse(
+      arrival_date_month == 1 |
+      arrival_date_month == 11 |
+      arrival_date_month == 12 | 
+      arrival_date_month == 2,
+      'NovDecJanFeb', arrival_date_month)) %>%
+    mutate(arr_mo = relevel(as.factor(arr_mo),ref='NovDecJanFeb')) %>%
+    mutate(meal_grp = case_when( meal == 'BB' ~ 'BB_FB', meal == 'FB' ~ 'BB_FB', TRUE ~ 'HB'))
+
+  data_test__city <- data_test__city %>%
+    mutate(customer_type_grp = case_when( customer_type == 'Transient' ~ 'Transient', TRUE ~ 'Other' )) %>%
+    mutate(mkt_seg_grp = case_when( market_segment == 'Corporate' ~ 'Corporate', TRUE ~ 'Other')) %>%
+    mutate(arr_mo = ifelse(
+      arrival_date_month == 1 | 
+      arrival_date_month == 11 | 
+      arrival_date_month == 12 | 
+      arrival_date_month == 2,
+      'NovDecJanFeb',arrival_date_month)) %>%
+    mutate(arr_mo = relevel(as.factor(arr_mo),ref='NovDecJanFeb')) %>%
+    mutate(meal_grp = case_when( meal == 'BB' ~ 'BB_FB', meal == 'FB' ~ 'BB_FB', TRUE ~ 'HB'))
+  
+  # Fit model 2, remove agent and total_children_grp
+  full_model_city_2 <- glm(is_canceled ~ 
+      deposit_type + country + has_special_request + lead_time + has_booking_change + customer_type_grp + total_nights_stayed +
+      mkt_seg_grp + days_in_waiting_list + meal_grp + arr_mo + adr + temp + adults,
+      data = data_train__city, family = "binomial")
+  
+  summary(full_model_city_2)
+```
+
+From the results of full_model_city_2 summary, it emerges that:
+- *arr_mo4* can be grouped with the baseline
+- *temp* can be removed due to insignificance. 
+- construct 95% to reduce level of country variable
+```{r}
+  data_train__city <- data_train__city %>%
+    mutate(arr_mo2 = as.factor(case_when(
+                                arr_mo == 3 ~ 3,
+                                arr_mo == 5 ~ 5,
+                                arr_mo == 6 ~ 6,
+                                arr_mo == 7 ~ 7,
+                                arr_mo == 8 ~ 8,
+                                arr_mo == 9 ~ 9,
+                                arr_mo == 10 ~ 10,
+                                TRUE ~ 0))) # 0 includes Jan,Feb,Apr,Nov,Dec
+                                    
+  data_test__city <- data_test__city %>%
+    mutate(arr_mo2 = as.factor(case_when(
+                                arr_mo == 3 ~ 3,
+                                arr_mo == 5 ~ 5,
+                                arr_mo == 6 ~ 6,
+                                arr_mo == 7 ~ 7,
+                                arr_mo == 8 ~ 8,
+                                arr_mo == 9 ~ 9,
+                                arr_mo == 10 ~ 10,
+                                TRUE~0))) # 0 includes Jan,Feb,Apr,Nov,Dec
+```
+By looking at the 95% CI chart, it looks like GBR, IRL and OTH can be grouped together since they overlapped with each other.
+```{r}
+  # 95% CI for country variable
+  country_city <- data.frame(
+    country_name=c('DEU','ESP','FRA','GBR','IRL','ITA',"Other"),
+    country_est=c(full_model_city_2$coefficients['countryDEU'],
+      full_model_city_2$coefficients['countryESP'],
+      full_model_city_2$coefficients['countryFRA'],
+      full_model_city_2$coefficients['countryGBR'],
+      full_model_city_2$coefficients['countryIRL'],
+      full_model_city_2$coefficients['countryITA'],
+      full_model_city_2$coefficients['countryOTHER']),    
+    lower_bound=c(full_model_city_2$coefficients['countryDEU']-1.96*coef(summary(full_model_city_2))[, "Std. Error"]['countryDEU'],
+      full_model_city_2$coefficients['countryESP']-1.96*coef(summary(full_model_city_2))[, "Std. Error"]['countryESP'],
+      full_model_city_2$coefficients['countryFRA']-1.96*coef(summary(full_model_city_2))[, "Std. Error"]['countryFRA'],
+      full_model_city_2$coefficients['countryGBR']-1.96*coef(summary(full_model_city_2))[, "Std. Error"]['countryGBR'],
+      full_model_city_2$coefficients['countryIRL']-1.96*coef(summary(full_model_city_2))[, "Std. Error"]['countryIRL'],
+      full_model_city_2$coefficients['countryITA']-1.96*coef(summary(full_model_city_2))[, "Std. Error"]['countryITA'],
+      full_model_city_2$coefficients['countryOTHER']-1.96*coef(summary(full_model_city_2))[, "Std. Error"]['countryOTHER']),
+    upper_bound=c(full_model_city_2$coefficients['countryDEU']+1.96*coef(summary(full_model_city_2))[, "Std. Error"]['countryDEU'],
+      full_model_city_2$coefficients['countryESP']+1.96*coef(summary(full_model_city_2))[, "Std. Error"]['countryESP'],
+      full_model_city_2$coefficients['countryFRA']+1.96*coef(summary(full_model_city_2))[, "Std. Error"]['countryFRA'],
+      full_model_city_2$coefficients['countryGBR']+1.96*coef(summary(full_model_city_2))[, "Std. Error"]['countryGBR'],
+      full_model_city_2$coefficients['countryIRL']+1.96*coef(summary(full_model_city_2))[, "Std. Error"]['countryIRL'],
+      full_model_city_2$coefficients['countryITA']+1.96*coef(summary(full_model_city_2))[, "Std. Error"]['countryITA'],
+      full_model_city_2$coefficients['countryOTHER']+1.96*coef(summary(full_model_city_2))[, "Std. Error"]['countryOTHER'])
+    )
+
+  ggplot(country, aes(country_name,country_est, color=country_name, fill=country_name)) + 
+    geom_point() + 
+    geom_errorbar( aes(ymin=lower_bound,ymax=upper_bound) )+labs(title="95% Confidence Interval for Country Variable - City Hotel",x="country",y="estimate coeff")
+  
+  data_train__city <- data_train__city %>%
+    mutate(country = as.factor(case_when (
+                                country == 'PRT' ~ 'PRT',
+                                country == 'DEU' ~ 'DEU',
+                                country == 'ESP' ~ 'ESP',
+                                country == 'FRA' ~ 'FRA',
+                                country == 'ITA' ~ 'ITA',
+                                TRUE~"Other"))) %>%
+    mutate(country = relevel(as.factor(country),ref='PRT'))
+  
+  data_test__city <- data_test__city %>%
+    mutate(country = as.factor(case_when (
+                                country == 'PRT' ~ 'PRT',
+                                country == 'DEU' ~ 'DEU',
+                                country == 'ESP' ~ 'ESP',
+                                country == 'FRA' ~ 'FRA',
+                                country == 'ITA' ~ 'ITA',
+                                TRUE~"Other"))) %>%
+    mutate(country = relevel(as.factor(country),ref='PRT'))
+```
+
+Next we will fit model 3 based on model 2 finding that it looks like arrival month can be group further to reduce level based on the 95% CI. 
+
+```{r}
+  #Fit model 3:
+  full_model_city_3 <- glm(is_canceled ~
+    deposit_type + country + has_special_request + lead_time + has_booking_change + customer_type_grp + total_nights_stayed + 
+      mkt_seg_grp + days_in_waiting_list + meal_grp + arr_mo2 + adr + adults,
+      data = data_train__city, family = "binomial")
+  
+  #summary(full_model_city_3)
+  
+  data_train__city <- data_train__city %>%
+    mutate(arr_mo3 = as.factor(case_when(
+                                arr_mo2 == 3~3, # 3 includes March, May, Aug, Oct
+                                arr_mo2 == 5~3,
+                                arr_mo2 == 6~6, # 6 include Jun, July
+                                arr_mo2 == 7~6,
+                                arr_mo2 == 8~3,
+                                arr_mo2 == 9~9,
+                                arr_mo2 == 10~3,
+                                TRUE~0))) # 0 includes Jan,Feb,Apr,Nov,Dec
+           
+  data_test__city <- data_test__city %>%
+    mutate(arr_mo3 = as.factor(case_when(
+                                arr_mo2 == 3~3, # 3 includes March, May, Aug, Oct
+                                arr_mo2 == 5~3,
+                                arr_mo2 == 6~6, # 6 include Jun, July
+                                arr_mo2 == 7~6,
+                                arr_mo2 == 8~3,
+                                arr_mo2 == 9~9,
+                                arr_mo2 == 10~3,
+                                 TRUE~0))) # 0 includes Jan,Feb,Apr,Nov,Dec
+  
+  #Model 4 after group arrival month further;
+  full_model_city_4 <- glm(is_canceled ~
+    deposit_type + country + has_special_request + lead_time + has_booking_change + customer_type_grp + total_nights_stayed + 
+      mkt_seg_grp + days_in_waiting_list + meal_grp + arr_mo3 + adr + adults,
+      data =data_train__city, family = "binomial")
+    
+  summary(full_model_city_4)
+```
+
+The findings of the City Hotel Model reveals the following: 
+
+- The Deposit Type is similar finding as the resort hotel, the non refundable and refundable customer have higher cancellation rate than no deposit customer. 
+- The Country column shows that Germany visitors (base) have the lowest cancellation rate, and Portuguese visitors have the highest cancellation rate The findings are similar with the Resort Hotel
+- The Special request, Lead Time, booking_change (Y/N), # of total night stayed, days on waiting list, adr, # of adults have similar effects like the Resort hotel as they do with the City Hotel
+- The Transient customer column has higher cancellation rate, and the magnitude is higher than that of the resort hotel one
+- Winter months (Jan through Feb) have higher cancellation rates than the other months. September has the lowest cancellation rate
+- The Corporate market segment has the lowest cancellation rate
+- The Half board has higher cancellation rate than all the other types
+
+Making Prediction: The threshold is set to 50%. 
+
+```{r}
+  # Predict on the training data set
+  pred_train <- predict(full_model_city_4, data_train__city, type='response')
+  data_train__city <- data_train__city %>%
+    mutate(pred = pred_train) %>%
+    mutate(pred_binary = as.factor(ifelse(pred >= 0.5, 1, 0)))
+  
+  cm <- confusionMatrix(data = data_train__city$pred_binary, reference = data_train__city$is_canceled, positive = '1')
+
+  plt <- as.data.frame(cm$table)
+  plt$Prediction <- factor(plt$Prediction, levels=rev(levels(plt$Prediction)))
+  
+  ggplot(plt, aes(Prediction,Reference, fill = Freq)) +
+    geom_tile() + geom_text(aes(label = Freq)) +
+    scale_fill_gradient(low="white", high="red") +
+    labs(x = "Reference",y = "Prediction")
+  
+  
+  # Predict on the test data set
+  pred_test <- predict(full_model_city_4, data_test__city, type='response')
+  data_test__city <- data_test__city %>%
+    mutate(pred = pred_test) %>%
+    mutate(pred_binary = as.factor(ifelse(pred_test >= 0.5, 1, 0)))
+  
+  cm_2 <-confusionMatrix( data = data_test__city$pred_binary, reference = data_test__city$is_canceled, positive='1')
+
+  plt_2 <- as.data.frame(cm_2$table)
+  plt_2$Prediction <- factor(plt_2$Prediction, levels=rev(levels(plt_2$Prediction)))
+  
+  ggplot(plt, aes(Prediction,Reference, fill = Freq)) +
+    geom_tile() + geom_text(aes(label = Freq)) +
+    scale_fill_gradient(low="white", high="blue") +
+    labs(x = "Reference",y = "Prediction")
+  
+  # Accuracy on test set is 77.5%
+  predicts <- prediction(as.numeric(data_test__city$pred),as.numeric(data_test__city$is_canceled))
+  roc <- performance(predicts,"tpr", "fpr")
+  plot(roc,main="ROC curve for City Hotel GLM model")
+  
+  
+  auc_ROCR <- performance(predicts, measure = "auc")
+  auc_ROCR <- auc_ROCR@y.values[[1]]
+  print(paste("AUC value for logistic regression: ",auc_ROCR))
+
+  #accuracy on test set is 77.5%
+  predicts <- prediction(as.numeric(data_test__city$pred),as.numeric(data_test__city$is_canceled))
+  roc <- performance(predicts,"tpr", "fpr")
+  plot(roc,main="ROC curve for City Hotel GLM model")
+  
+  
+  auc_ROCR <- performance(predicts, measure = "auc")
+  auc_ROCR <- auc_ROCR@y.values[[1]]
+  print(paste("AUC value for logistic regression: ",auc_ROCR))
+```
+<blockquote class="success">
+    <span>`r emo::ji("sparkles")`</span>
+    <span>
+      <strong>CONCLUSION:</strong> This concludes the analysis on the City Hotel type.
+    </span>
+</blockquote>
+
+## Conclusions
+The result of the model trials and the accuracy reveals a relatively accurate model that can predict rather successfully whether a booking will be susceptible to a cancellation in the future. Although our methodology is not perfect, and there are several results we would have preferred to verify through other means, our journey towards development of the model has been fruitful and beneficial.
+
+Forward method of stepwise AIC regression was used in this project, forward method produces suppressor effects when predictors are only significant when another predictor is held constant. In the future, backward method should be considered to remove this flaw. Another area of improvement is to add the suggested "removed" predictors back to the model to confirm indeed they are not significant. Maybe in the future we can look into random forest to select the importance of variables and see if accuracy and AUC can be improved.    
+
+One of the approaches we never got to explore but would have liked to is adding a time series analysis. Because vacations are so seasonal, its most likely a given that this pattern will likely have an impact on the cancellations experienced by a business. This is something we never got a chance to explore but would have liked to. It would most likely have revealed that cancellations are more frequent during the non-summer months due to the consistency of summer vacations. In addition, cross validation is something that would be beneficial to prep the data if we got a chance in order to ensure we effectively accommodate the real effects of the data without including, to the best of our ability, the random effects of the data.
+
+There are several considerations when it comes to developing a model for such a specialized sector within the hospitality and recreation industry such as this one that we've chosen to do our project on. Despite the objectiveness of this technical solution, there are so many components that go into whether or not a customer is likely to cancel a booking. Take for example, the events of 2019 that took place with a global pandemic and the harsh impact of this on the hospitality sector of countries all over the world. For us as a team, this would be an interesting subject to delve into as unforeseen circumstances such as these have a major impact on bookings, profit and overall health for a business such as these hotels.
+
+Potential for a future exploration on this dataset can include consideration for events such as lockdowns and health precautions to prevent spreading of viruses. It would be interesting to explore how hotels have returned to, if at all, the pre-pandemic levels of customer bookings and if so, what has enabled the success of these establishments. Perhaps a clustering or classification model could be used to group together marketing groups of customers in which various advertisement techniques have worked differently. Ie. Perhaps families care the most about sanitization techniques or young adults care about a lack of a mask mandate or perhaps the elderly customers prefer a vaccination proof as precautions taken at the hotels.
+
+An efficient model needs to be flexible enough to account for a changing world and circumstances. This project has been as great opportunity to learn real life applications of business data analysis and we can only hope to produce better models and analysis to contribute to amore meaningful application outside of the classroom.
+
+# Sources
+Hotel booking demand data sets - <a href="https://www.sciencedirect.com/science/article/pii/S2352340918315191">https://www.sciencedirect.com/science/article/pii/S2352340918315191</a>
